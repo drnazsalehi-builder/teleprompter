@@ -213,7 +213,7 @@ function render(src){
     box.appendChild(p);
   }
   setPos(Math.min(store.get("pos",0), words.length), true);
-  status(words.length ? `${words.length} words loaded. Tap “Start listening”.` : "Load a script to begin");
+  status(words.length ? `${words.length} words loaded. Tap “Start listening”. (v2)` : "Load a script to begin (v2)");
 }
 
 /* ---------- position + highlight ---------- */
@@ -299,6 +299,7 @@ function startRec(){
   if (!SR){ status("This browser can't listen. Open the page in Google Chrome.", true); return; }
   rec = new SR();
   rec.lang = settings.lang; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  rec.onstart = () => status("Listening started — start reading.");
   rec.onaudiostart = () => status("Mic is on — waiting for words…");
   rec.onspeechstart = () => status("Hearing sound — turning it into words…");
   rec.onresult = e => {
@@ -313,16 +314,40 @@ function startRec(){
     locate(ws);
   };
   rec.onerror = e => {
-    if (e.error === "not-allowed" || e.error === "service-not-allowed"){
+    if (e.error === "not-allowed"){
       status("Microphone blocked. Allow the mic for this page in Chrome, then try again.", true); stop();
+    } else if (e.error === "service-not-allowed"){
+      status("Chrome's speech service isn't available. Check the Google app is installed and turned on (Android Settings → Apps → Google).", true); stop();
     } else if (e.error === "network"){ status("Error: network — Chrome can't reach its speech service. Reconnecting…", true); }
+    else if (e.error === "audio-capture"){ status("Error: the microphone can't be reached (another app may be using it).", true); }
+    else if (e.error === "language-not-supported"){ status("Error: this language isn't available. Try another English in Settings.", true); }
     else if (e.error !== "no-speech" && e.error !== "aborted"){ status("Error: " + e.error, true); }
   };
   rec.onend = () => { if (live) setTimeout(() => { try{ rec.start(); }catch(_){} }, 60); };
-  try{ rec.start(); }catch(_){}
+  try{ rec.start(); }catch(err){ status("Couldn't start listening: " + (err && err.message || err), true); }
+}
+async function askMic(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return true;
+  status("Asking for the microphone…");
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({audio:true});
+    s.getTracks().forEach(t => t.stop());
+    await new Promise(r => setTimeout(r, 300));   // let Android release the mic
+    return true;
+  }catch(err){
+    const n = err && err.name;
+    if (n === "NotAllowedError" || n === "SecurityError")
+      status("Microphone is blocked. Chrome ⋮ → Settings → Site settings → Microphone → allow this site. Also: Android Settings → Apps → Chrome → Permissions → Microphone → Allow.", true);
+    else if (n === "NotFoundError") status("No microphone found on this device.", true);
+    else if (n === "NotReadableError") status("Another app is using the microphone. Close it and try again.", true);
+    else status("Microphone problem: " + (n || err), true);
+    return false;
+  }
 }
 async function start(){
   if (!words.length){ openLoader(); return; }
+  if (!SR){ status("This browser can't listen. Open the link in Google Chrome (not Samsung Internet or the Drive viewer).", true); return; }
+  if (!(await askMic())) return;
   live = true; document.body.classList.add("live");
   $("go").lastChild.textContent = " Stop";
   status("Listening… just start reading.");
