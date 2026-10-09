@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Voice Teleprompter</title>
+<style>
+:root{
+  --bg:#000; --ink:#f5f1e8; --read:#5d5a55; --mark:#e0a63a; --dir:#8fa3b8;
+  --stress:#fff; --bar:#16161a; --btn:#2a2a31; --accent:#c2457a; --line:#c2457a;
+  --fs:56px; --lh:1.45; --w:88%; --rl:0.30;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+button,select,input{font:inherit;color:inherit}
+#scroller{position:absolute;inset:0;overflow-y:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+#scroller::-webkit-scrollbar{display:none}
+#text{width:var(--w);margin:0 auto;font-size:var(--fs);line-height:var(--lh);
+  padding:calc(var(--rl)*100vh) 0 80vh;transform-origin:center}
+body.mirror #text{transform:scaleX(-1)}
+body.flip #text{transform:scaleY(-1)}
+body.mirror.flip #text{transform:scale(-1,-1)}
+p.l{margin:0 0 .15em}
+.chunk{margin:1.4em 0 .3em;font-size:.38em;letter-spacing:.12em;color:var(--accent);
+  font-weight:700;border-top:2px solid #333;padding-top:.6em}
+.chunk.vo{color:var(--dir)}
+.dir{font-size:.45em;color:var(--dir);font-style:italic;margin:.2em 0 .5em}
+.info{font-size:.35em;color:#777;margin:0 0 .4em}
+.w{border-radius:.12em;transition:color .25s}
+.w.done{color:var(--read)}
+.w.now{background:#ffffff22;color:#fff}
+.w.caps{font-weight:800;color:var(--stress)}
+.w.caps.done{color:var(--read)}
+.pz{color:var(--mark);font-weight:800;font-size:.7em;margin:0 .1em;letter-spacing:-.05em}
+.tag{font-size:.45em;color:var(--mark);border:1px solid var(--mark);border-radius:.4em;
+  padding:0 .35em;vertical-align:middle;margin:0 .15em}
+.aside{color:var(--dir);font-size:.6em}
+#readline{position:fixed;left:0;width:3.2vw;height:0;border-top:6px solid var(--line);
+  top:calc(var(--rl)*100vh + .35*var(--fs));pointer-events:none;opacity:.85;z-index:5}
+#readline::after{content:"";position:absolute;right:-14px;top:-13px;border:10px solid transparent;
+  border-left:14px solid var(--line)}
+body.mirror #readline{left:auto;right:0;transform:scaleX(-1)}
+
+#bar{position:fixed;left:0;right:0;top:0;z-index:20;display:flex;gap:8px;flex-wrap:wrap;
+  align-items:center;padding:10px 12px;background:var(--bar);transition:opacity .4s}
+body.live.words #bar{opacity:.0}
+body.live #bar:hover,body.live.showbar #bar{opacity:1}
+#bar button,#bar select{background:var(--btn);border:0;border-radius:10px;padding:10px 14px;
+  font-size:17px;cursor:pointer;min-height:44px}
+#bar .big{background:var(--accent);font-weight:700;min-width:150px}
+body.live #bar .big{background:#b33}
+#status{font-size:15px;color:#aaa;margin-left:auto;max-width:40%;text-align:right}
+#status.err{color:#ff7b7b}
+#mic{width:12px;height:12px;border-radius:50%;background:#444;display:inline-block}
+body.live #mic{background:#3c3;box-shadow:0 0 10px #3c3}
+body.hearing #mic{background:#7f7;box-shadow:0 0 18px #7f7}
+
+#panel,#loader{position:fixed;z-index:30;inset:70px 12px auto auto;width:min(420px,calc(100% - 24px));
+  background:#1c1c22;border-radius:14px;padding:16px;display:none;font-size:16px;
+  max-height:calc(100vh - 90px);overflow:auto;box-shadow:0 10px 40px #000}
+#loader{inset:70px 12px auto 12px;width:auto;max-width:900px;margin:auto}
+#panel.open,#loader.open{display:block}
+#panel label{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0}
+#panel input[type=range]{flex:1;max-width:220px}
+#loader textarea{width:100%;height:45vh;background:#0e0e12;color:#ddd;border:1px solid #333;
+  border-radius:10px;padding:10px;font-size:15px}
+#loader .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+#loader button{background:var(--btn);border:0;border-radius:10px;padding:10px 14px;min-height:44px}
+#loader .go{background:var(--accent);font-weight:700}
+#heard{position:fixed;z-index:15;left:12px;right:12px;bottom:10px;font-size:15px;color:#888;
+  text-align:center;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.nohear #heard{display:none}
+#test{display:none;position:fixed;z-index:25;bottom:40px;left:12px;right:12px}
+#test input{width:100%;padding:10px;background:#222;border:1px solid #444;border-radius:8px}
+body.testmode #test{display:block}
+</style>
+</head>
+<body class="nohear">
+<div id="scroller"><div id="text"></div></div>
+<div id="readline"></div>
+
+<div id="bar">
+  <button class="big" id="go"><span id="mic"></span> Start listening</button>
+  <button id="loadBtn">Script</button>
+  <select id="chunks" title="Jump to chunk"><option>Jump to…</option></select>
+  <button id="back" title="Back one line">▲</button>
+  <button id="fwd" title="Forward one line">▼</button>
+  <button id="setBtn">Settings</button>
+  <button id="fs" title="Full screen">⛶</button>
+  <span id="status">Load a script to begin</span>
+</div>
+
+<div id="panel">
+  <b>Settings</b>
+  <label>Text size <input type="range" id="sFs" min="28" max="120" step="2"></label>
+  <label>Line spacing <input type="range" id="sLh" min="1.1" max="2" step="0.05"></label>
+  <label>Text width <input type="range" id="sW" min="50" max="98" step="1"></label>
+  <label>Reading line height <input type="range" id="sRl" min="0.12" max="0.6" step="0.02"></label>
+  <label>Catch-up speed <input type="range" id="sSp" min="0.03" max="0.25" step="0.01"></label>
+  <label>Mirror (left↔right, for glass) <input type="checkbox" id="sMirror"></label>
+  <label>Upside down <input type="checkbox" id="sFlip"></label>
+  <label>Show what it hears <input type="checkbox" id="sHear"></label>
+  <label>Accent / language
+    <select id="sLang">
+      <option value="en-US">English (US)</option>
+      <option value="en-GB">English (UK)</option>
+      <option value="en-CA">English (Canada)</option>
+      <option value="en-AU">English (Australia)</option>
+    </select></label>
+  <label><button id="restart">Go back to the start</button></label>
+</div>
+
+<div id="loader">
+  <b>Your script</b> — paste the text here, or open the “Teleprompter - for the app.txt” file.
+  <textarea id="src" placeholder="Paste your script here…"></textarea>
+  <div class="row">
+    <button class="go" id="useBtn">Use this script</button>
+    <button id="fileBtn">Open .txt file…</button>
+    <button id="closeLoader">Close</button>
+    <input type="file" id="file" accept=".txt,text/plain" hidden>
+  </div>
+</div>
+
+<div id="heard"></div>
+<div id="test"><input id="testIn" placeholder="Test mode: type words as if spoken, press Enter"></div>
+
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("vtp_"+k); return v===null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("vtp_"+k, JSON.stringify(v)); }catch(e){} }
+};
+
+/* ---------- word normalisation ---------- */
+const NUM = {zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,
+  eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,
+  nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90,
+  hundred:100,thousand:1000,first:"1st",second:"2nd",third:"3rd"};
+const ALIAS = {doctor:"dr",okay:"ok",percent:"%",gonna:"gonna",wanna:"wanna",cosy:"cozy",
+  colour:"color",favourite:"favorite",centre:"center",behaviour:"behavior"};
+function norm(t){
+  t = t.toLowerCase().replace(/[’‘`]/g,"'").replace(/(\d),(\d)/g,"$1$2");
+  t = t.replace(/[^a-z0-9%']/g,"").replace(/'/g,"");
+  if (t in NUM) t = String(NUM[t]);
+  if (t in ALIAS) t = ALIAS[t];
+  return t;
+}
+const STOP = new Set("a an the and or but to of in on at is it its i you we he she they that this was be are for with as so do".split(" "));
+function lev(a,b){
+  if (Math.abs(a.length-b.length)>2) return 9;
+  const m=a.length,n=b.length; let prev=Array.from({length:n+1},(_,j)=>j);
+  for(let i=1;i<=m;i++){ const cur=[i]; for(let j=1;j<=n;j++)
+    cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1)); prev=cur; }
+  return prev[n];
+}
+function same(a,b){
+  if (a===b) return true;
+  if (!a || !b) return false;
+  const sa=a.replace(/(es|s|ed|ing)$/,""), sb=b.replace(/(es|s|ed|ing)$/,"");
+  if (sa.length>=3 && sa===sb) return true;
+  const L=Math.min(a.length,b.length);
+  if (L>=4 && lev(a,b) <= (L>=7?2:1)) return true;
+  if (L>=6 && a.slice(0,6)===b.slice(0,6)) return true;
+  return false;
+}
+const weight = k => STOP.has(k) ? 0.5 : (k.length<=3 ? 0.8 : 1);
+
+/* ---------- parse + render the script ---------- */
+let words = [];      // {key, el}
+let pos = 0;         // index of next word to read
+let chunkEls = [];
+function render(src){
+  const box = $("text"); box.innerHTML = ""; words = []; chunkEls = [];
+  const sel = $("chunks"); sel.length = 1;
+  const lines = src.replace(/\r/g,"").split("\n");
+  const hasChunks = lines.some(l => /^\s*===/.test(l));
+  let seenChunk = !hasChunks;
+  for (const raw of lines){
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^===/.test(line)){
+      seenChunk = true;
+      const lab = line.replace(/=+/g," ").replace(/\s+/g," ").trim();
+      const d = document.createElement("div");
+      d.className = "chunk" + (/voice|vo\b/i.test(lab) ? " vo" : "");
+      d.textContent = lab; box.appendChild(d); chunkEls.push(d);
+      const o = document.createElement("option"); o.value = chunkEls.length-1; o.textContent = lab; sel.appendChild(o);
+      continue;
+    }
+    if (!seenChunk){ const d=document.createElement("div"); d.className="info"; d.textContent=line; box.appendChild(d); continue; }
+    if (/^\(.*\)$/.test(line)){ const d=document.createElement("div"); d.className="dir"; d.textContent=line; box.appendChild(d); continue; }
+    const p = document.createElement("p"); p.className = "l";
+    for (const seg of line.split(/(\[[^\]]*\])/)){
+      if (!seg) continue;
+      if (/^\[.*\]$/.test(seg)){ const s=document.createElement("span"); s.className="tag"; s.textContent=seg.slice(1,-1); p.append(s," "); continue; }
+      for (const tok of seg.split(/\s+/)){
+        if (!tok) continue;
+        if (/^\/+$/.test(tok)){ const s=document.createElement("span"); s.className="pz"; s.textContent=tok.replace(/\//g,"|"); p.append(s," "); continue; }
+        if (tok==="~"){ const s=document.createElement("span"); s.className="aside"; s.textContent="~"; p.append(s," "); continue; }
+        const keys = tok.split(/[-–—\/]+/).map(norm).filter(Boolean);
+        if (!keys.length){ p.append(tok+" "); continue; }
+        const s = document.createElement("span"); s.className = "w"; s.textContent = tok;
+        const letters = tok.replace(/[^A-Za-z]/g,"");
+        if (letters.length>=2 && letters===letters.toUpperCase()) s.classList.add("caps");
+        s.dataset.i = words.length;
+        for (const k of keys) words.push({key:k, el:s});
+        p.append(s," ");
+      }
+    }
+    box.appendChild(p);
+  }
+  setPos(Math.min(store.get("pos",0), words.length), true);
+  status(words.length ? `${words.length} words loaded. Tap “Start listening”.` : "Load a script to begin");
+}
+
+/* ---------- position + highlight ---------- */
+let lastNow = null;
+function setPos(n, jump){
+  n = Math.max(0, Math.min(words.length, n));
+  const a = Math.min(pos,n), b = Math.max(pos,n);
+  if (jump){ words.forEach((w,i)=>w.el.classList.toggle("done", i<n)); }
+  else for (let i=a;i<b;i++) words[i].el.classList.toggle("done", i<n);
+  if (n>0 && words[n-1]) words[n-1].el.classList.add("done");
+  pos = n;
+  if (lastNow) lastNow.classList.remove("now");
+  lastNow = words[pos] ? words[pos].el : null;
+  if (lastNow) lastNow.classList.add("now");
+  store.set("pos", pos);
+  follow = true;
+}
+
+/* ---------- smooth scrolling (waits / catches up) ---------- */
+const sc = $("scroller");
+let follow = true, y = 0, userUntil = 0;
+function targetY(){
+  const el = words[pos] ? words[pos].el : (words.length ? words[words.length-1].el : null);
+  if (!el) return 0;
+  const rl = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--rl"));
+  const elTop = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
+  return elTop - rl * sc.clientHeight;
+}
+function tick(){
+  if (follow && performance.now() > userUntil){
+    const t = targetY(), d = t - y;
+    if (Math.abs(d) > 0.5){ y += d * settings.sp; sc.scrollTop = y; }
+  } else y = sc.scrollTop;
+  requestAnimationFrame(tick);
+}
+const pauseAuto = () => { userUntil = performance.now() + 2500; };
+sc.addEventListener("touchstart", pauseAuto, {passive:true});
+sc.addEventListener("wheel", pauseAuto, {passive:true});
+
+/* tap a word = continue from there */
+$("text").addEventListener("click", e => {
+  const s = e.target.closest(".w"); if (!s) return;
+  setPos(+s.dataset.i, true); userUntil = 0;
+});
+
+/* ---------- matching what was heard to the script ---------- */
+function locate(spoken){
+  const S = spoken.map(norm).filter(Boolean).slice(-8);
+  if (!S.length || !words.length) return;
+  let best = null;
+  const lo = Math.max(0, pos-250), hi = Math.min(words.length-1, pos+120);
+  for (let anchor = S.length-1; anchor >= Math.max(0,S.length-2); anchor--){
+    for (let p = lo; p <= hi; p++){
+      if (!same(words[p].key, S[anchor])) continue;
+      // walk backwards, allowing skipped/extra words
+      let score = weight(S[anchor]), j = p-1, miss = 0, hits = 1;
+      for (let k = anchor-1; k >= 0 && miss < 3; k--){
+        let found = -1;
+        for (let m = j; m >= Math.max(0, j-2); m--) if (same(words[m].key, S[k])) { found = m; break; }
+        if (found >= 0){ score += weight(S[k]); hits++; j = found-1; } else miss++;
+      }
+      if (anchor < S.length-1) score -= 0.3;          // last word didn't match: slightly weaker
+      const dist = p+1 - pos;
+      let need;
+      if (dist >= -1 && dist <= 6) need = (hits>=2 || weight(S[anchor])===1) ? 0.9 : 1.4;
+      else if (dist > 6 && dist <= 30) need = 1.9;
+      else if (dist > 30) need = 2.8;                 // big jump forward: be sure
+      else need = 3.5;                                // going back (a retake): be sure
+      if (score < need) continue;
+      const rank = score - Math.abs(dist) * (dist < 0 ? 0.01 : 0.012);
+      if (!best || rank > best.rank) best = {p, rank};
+    }
+    if (best) break;
+  }
+  if (best && best.p + 1 !== pos) setPos(best.p + 1, best.p + 1 < pos);
+}
+
+/* ---------- speech recognition ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, live = false, gotWords = false, wakeLock = null, hearTimer = 0;
+function status(t, err){ const s=$("status"); s.textContent=t; s.classList.toggle("err", !!err); }
+function startRec(){
+  if (!SR){ status("This browser can't listen. Open the page in Google Chrome.", true); return; }
+  rec = new SR();
+  rec.lang = settings.lang; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  rec.onaudiostart = () => status("Mic is on — waiting for words…");
+  rec.onspeechstart = () => status("Hearing sound — turning it into words…");
+  rec.onresult = e => {
+    gotWords = true; document.body.classList.add("words");
+    status("Listening… (words are coming through)");
+    let txt = "";
+    for (let i = Math.max(0, e.results.length-3); i < e.results.length; i++) txt += " " + e.results[i][0].transcript;
+    const ws = txt.trim().split(/\s+/);
+    $("heard").textContent = "heard: " + ws.slice(-12).join(" ");
+    document.body.classList.add("hearing"); clearTimeout(hearTimer);
+    hearTimer = setTimeout(()=>document.body.classList.remove("hearing"), 400);
+    locate(ws);
+  };
+  rec.onerror = e => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed"){
+      status("Microphone blocked. Allow the mic for this page in Chrome, then try again.", true); stop();
+    } else if (e.error === "network"){ status("Error: network — Chrome can't reach its speech service. Reconnecting…", true); }
+    else if (e.error !== "no-speech" && e.error !== "aborted"){ status("Error: " + e.error, true); }
+  };
+  rec.onend = () => { if (live) setTimeout(() => { try{ rec.start(); }catch(_){} }, 60); };
+  try{ rec.start(); }catch(_){}
+}
+async function start(){
+  if (!words.length){ openLoader(); return; }
+  live = true; document.body.classList.add("live");
+  $("go").lastChild.textContent = " Stop";
+  status("Listening… just start reading.");
+  gotWords = false; document.body.classList.remove("words");
+  startRec();
+  setTimeout(() => { if (live && !gotWords) status("No words yet after 8 s. Is this Google Chrome? Is the right microphone chosen?", true); }, 8000);
+  try{ wakeLock = await navigator.wakeLock.request("screen"); }catch(_){}
+}
+function stop(){
+  live = false; document.body.classList.remove("live");
+  $("go").lastChild.textContent = " Start listening";
+  try{ rec && rec.abort(); }catch(_){}
+  try{ wakeLock && wakeLock.release(); }catch(_){}
+  status("Paused. Tap a word to continue from there.");
+}
+$("go").onclick = () => live ? stop() : start();
+document.addEventListener("visibilitychange", async () => {
+  if (live && document.visibilityState === "visible"){ try{ wakeLock = await navigator.wakeLock.request("screen"); }catch(_){} }
+});
+/* tap near the top while live = show the bar for a few seconds */
+let barT = 0;
+document.addEventListener("pointerdown", e => {
+  if (!live || e.clientY > 90) return;
+  document.body.classList.add("showbar"); clearTimeout(barT);
+  barT = setTimeout(()=>document.body.classList.remove("showbar"), 4000);
+});
+
+/* ---------- manual moves (buttons + Bluetooth remote / keyboard) ---------- */
+function lineStep(dir){
+  if (!words.length) return;
+  const cur = words[Math.min(pos, words.length-1)].el;
+  const top0 = cur.getBoundingClientRect().top;
+  let i = pos;
+  if (dir > 0){ while (i < words.length-1 && words[i].el.getBoundingClientRect().top <= top0 + 2) i++; }
+  else {
+    while (i > 0 && words[i].el.getBoundingClientRect().top >= top0 - 2) i--;
+    const t = words[i].el.getBoundingClientRect().top;
+    while (i > 0 && Math.abs(words[i-1].el.getBoundingClientRect().top - t) < 2) i--;
+  }
+  setPos(i, true); userUntil = 0;
+}
+$("fwd").onclick = () => lineStep(1);
+$("back").onclick = () => lineStep(-1);
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
+  if (["ArrowDown","PageDown","ArrowRight"].includes(e.key)){ e.preventDefault(); lineStep(1); }
+  else if (["ArrowUp","PageUp","ArrowLeft"].includes(e.key)){ e.preventDefault(); lineStep(-1); }
+  else if (e.key === " " || e.key === "Enter"){ e.preventDefault(); live ? stop() : start(); }
+});
+$("chunks").onchange = e => {
+  const c = chunkEls[+e.target.value]; e.target.selectedIndex = 0; if (!c) return;
+  let n = c.nextElementSibling;
+  while (n && !n.querySelector?.(".w")) n = n.nextElementSibling;
+  const w = n && n.querySelector(".w"); if (w) { setPos(+w.dataset.i, true); userUntil = 0; }
+};
+$("fs").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else document.documentElement.requestFullscreen?.().catch(()=>{});
+};
+
+/* ---------- loading the script ---------- */
+function openLoader(){ $("loader").classList.add("open"); $("panel").classList.remove("open"); $("src").value = store.get("src",""); }
+$("loadBtn").onclick = () => $("loader").classList.toggle("open") ? openLoader() : 0;
+$("closeLoader").onclick = () => $("loader").classList.remove("open");
+$("fileBtn").onclick = () => $("file").click();
+$("file").onchange = async e => { const f = e.target.files[0]; if (f) $("src").value = await f.text(); };
+$("useBtn").onclick = () => {
+  const s = $("src").value; if (!s.trim()) return;
+  if (s !== store.get("src","")) store.set("pos", 0);
+  store.set("src", s); render(s); $("loader").classList.remove("open");
+};
+$("restart").onclick = () => { setPos(0, true); userUntil = 0; $("panel").classList.remove("open"); };
+
+/* ---------- settings ---------- */
+const settings = Object.assign({fs:56, lh:1.45, w:88, rl:0.30, sp:0.09, mirror:false, flip:false, hear:true, lang:"en-US"}, store.get("settings",{}));
+function applySettings(){
+  const r = document.documentElement.style;
+  r.setProperty("--fs", settings.fs+"px"); r.setProperty("--lh", settings.lh);
+  r.setProperty("--w", settings.w+"%"); r.setProperty("--rl", settings.rl);
+  document.body.classList.toggle("mirror", settings.mirror);
+  document.body.classList.toggle("flip", settings.flip);
+  document.body.classList.toggle("nohear", !settings.hear);
+  store.set("settings", settings);
+}
+const bind = (id, key, isBool) => {
+  const el = $(id);
+  if (isBool) el.checked = settings[key]; else el.value = settings[key];
+  el.addEventListener("input", () => {
+    settings[key] = isBool ? el.checked : (el.tagName === "SELECT" ? el.value : parseFloat(el.value));
+    applySettings();
+    if (key === "lang" && live){ stop(); start(); }
+  });
+};
+bind("sFs","fs"); bind("sLh","lh"); bind("sW","w"); bind("sRl","rl"); bind("sSp","sp");
+bind("sMirror","mirror",true); bind("sFlip","flip",true); bind("sHear","hear",true); bind("sLang","lang");
+$("setBtn").onclick = () => { $("panel").classList.toggle("open"); $("loader").classList.remove("open"); };
+applySettings();
+
+/* ---------- test mode (?test) : type words as if spoken ---------- */
+if (/[?&]test/.test(location.search)) document.body.classList.add("testmode");
+let simBuf = [];
+window.__sim = text => { simBuf = simBuf.concat(text.split(/\s+/)).slice(-20); locate(simBuf); return pos; };
+$("testIn").addEventListener("keydown", e => { if (e.key === "Enter"){ window.__sim(e.target.value); e.target.value = ""; } });
+
+/* ---------- go ---------- */
+const saved = store.get("src","");
+if (saved) render(saved); else { render(""); openLoader(); }
+if (!SR) status("This browser can't listen. Open the page in Google Chrome.", true);
+requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
